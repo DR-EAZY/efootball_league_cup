@@ -1,0 +1,24 @@
+# Dependencies
+
+node_modules/
+
+# Production build
+
+dist/
+
+# Temporary files
+
+.tmp/
+*.tsbuildinfo
+
+# Local environment variables
+
+.env
+.env.local
+.env.*.local
+
+# Logs
+
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
