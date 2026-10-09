@@ -209,6 +209,20 @@ export function AdminTeamsPage() {
   const [manager, setManager] = useState("");
   const [ign, setIgn] = useState("");
   const [logo, setLogo] = useState("");
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState("");
+
+  useEffect(() => {
+    if (!logoFile) {
+      setLogoPreview(logo);
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(logoFile);
+    setLogoPreview(previewUrl);
+
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [logoFile, logo]);
 
   async function refresh() {
     setLoading(true);
@@ -237,6 +251,7 @@ export function AdminTeamsPage() {
     setManager(team?.manager_name || "");
     setIgn(team?.ign || "");
     setLogo(team?.logo_url || "");
+    setLogoFile(null);
     setSeason(team?.season_id || season || "");
     setShowForm(true);
     setMessage("");
@@ -244,24 +259,58 @@ export function AdminTeamsPage() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+
     if (!season) {
       setError("Create a season before adding teams.");
       return;
     }
+
     setBusy(true);
     setError("");
     setMessage("");
+
     try {
+      let logoUrl = logo.trim() || null;
+
+      if (logoFile) {
+        const supabase = requireSupabase();
+        const bucket = "team-logos";
+
+        const safeName = logoFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const filePath = `${season}/${crypto.randomUUID()}-${safeName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from(bucket)
+          .upload(filePath, logoFile, {
+            contentType: logoFile.type,
+            upsert: false,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage
+          .from(bucket)
+          .getPublicUrl(filePath);
+
+        logoUrl = data.publicUrl;
+      }
+
       await saveTeam({
         id: editing?.id,
         name,
         manager_name: manager || null,
         ign: ign || null,
-        logo_url: logo || null,
-        season_id: season
+        logo_url: logoUrl,
+        season_id: season,
       });
-      setMessage(editing ? "Team updated successfully." : "Team created successfully.");
+
+      setLogo(logoUrl || "");
+      setLogoFile(null);
+      setMessage(
+        editing ? "Team updated successfully." : "Team created successfully."
+      );
       setShowForm(false);
+
       await refresh();
     } catch (e) {
       setError(readableError(e));
@@ -321,7 +370,62 @@ export function AdminTeamsPage() {
             <label>Team name *<input required maxLength={70} value={name} onChange={e => setName(e.target.value)} /></label>
             <label>Manager / captain<input maxLength={100} value={manager} onChange={e => setManager(e.target.value)} /></label>
             <label>In-game username (IGN)<input maxLength={70} value={ign} onChange={e => setIgn(e.target.value)} /></label>
-            <label>Logo image URL<input type="url" placeholder="https://…" value={logo} onChange={e => setLogo(e.target.value)} /></label>
+            
+            <label className="span-two">
+              Team logo
+
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+
+                  if (!file) {
+                    setLogoFile(null);
+                    return;
+                  }
+
+                  if (file.size > 5 * 1024 * 1024) {
+                    setError("Logo must be 5 MB or smaller.");
+                    e.target.value = "";
+                    return;
+                  }
+
+                  setError("");
+                  setLogoFile(file);
+                }}
+              />
+
+              <span className="muted">
+                Choose a PNG, JPG, WebP or GIF image. Maximum size: 5 MB.
+              </span>
+
+              {logoPreview && (
+                <div style={{ marginTop: 12 }}>
+                  <img
+                    src={logoPreview}
+                    alt="Team logo preview"
+                    style={{
+                      width: 96,
+                      height: 96,
+                      objectFit: "contain",
+                      borderRadius: 12,
+                      border: "1px solid #ddd",
+                      padding: 8,
+                    }}
+                  />
+                </div>
+              )}
+
+              <span>Or paste an existing logo URL</span>
+
+              <input
+                type="url"
+                placeholder="https://example.com/logo.png"
+                value={logo}
+                onChange={(e) => setLogo(e.target.value)}
+              />
+            </label>
           </div>
           <button className="button button-dark" disabled={busy}>{busy ? "Saving…" : "Save team"}</button>
         </form>
