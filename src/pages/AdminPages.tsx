@@ -1,4 +1,3 @@
-
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import {
@@ -10,7 +9,10 @@ import {
   Users,
   CalendarDays,
   CheckCircle2,
-  FileCheck2,
+  Search,
+  Clock,
+  AlertCircle,
+  FileText,
 } from "lucide-react";
 import type { Fixture, Season, Team } from "../types";
 import {
@@ -33,6 +35,7 @@ import Notice from "../components/Notice";
 import Loading from "../components/Loading";
 import TeamMark from "../components/TeamMark";
 import StatusPill from "../components/StatusPill";
+import "../styles/admin-fixtures.css";
 
 export function LoginPage() {
   const [email, setEmail] = useState("");
@@ -703,12 +706,16 @@ export function AdminFixturesPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Separate modal controls
+  // Match Centre specific UI states
+  const [selectedMatchday, setSelectedMatchday] = useState<number | "all">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Modal controls
   const [showFixtureModal, setShowFixtureModal] = useState(false);
-  const [showResultModal, setShowResultModal] = useState(false);
   const [editing, setEditing] = useState<Fixture | null>(null);
 
-  // Round-robin generator state
+  // Round-robin generator state & preview
   const [preview, setPreview] = useState<
     {
       matchday: number;
@@ -716,21 +723,22 @@ export function AdminFixturesPage() {
       away_team_id: string;
     }[] | null
   >(null);
-
   const [double, setDouble] = useState(false);
+  const [showGeneratorPreview, setShowGeneratorPreview] = useState(false);
 
   // Fixture edit fields
   const [home, setHome] = useState("");
   const [away, setAway] = useState("");
   const [matchday, setMatchday] = useState("1");
   const [date, setDate] = useState("");
-  const [status, setStatus] =
-    useState<Fixture["status"]>("scheduled");
+  const [status, setStatus] = useState<Fixture["status"]>("scheduled");
   const [notes, setNotes] = useState("");
 
-  // Result entry fields
-  const [homeScore, setHomeScore] = useState("0");
-  const [awayScore, setAwayScore] = useState("0");
+  // Inline scores state map: fixtureId -> { home: string, away: string }
+  const [inlineScores, setInlineScores] = useState<
+    Record<string, { home: string; away: string }>
+  >({});
+  const [savingFixtureId, setSavingFixtureId] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -752,6 +760,22 @@ export function AdminFixturesPage() {
 
       setTeams(tt);
       setFixtures(ff);
+
+      // Initialize inline score inputs from loaded fixtures
+      const initialScores: Record<string, { home: string; away: string }> = {};
+      ff.forEach((f) => {
+        initialScores[f.id] = {
+          home: f.home_score !== null && f.home_score !== undefined ? String(f.home_score) : "",
+          away: f.away_score !== null && f.away_score !== undefined ? String(f.away_score) : "",
+        };
+      });
+      setInlineScores(initialScores);
+
+      // Auto-select matchday if available
+      const matchdays = Array.from(new Set(ff.map((f) => f.matchday))).sort((a, b) => a - b);
+      if (matchdays.length > 0 && selectedMatchday !== "all" && !matchdays.includes(selectedMatchday as number)) {
+        setSelectedMatchday(matchdays[0]);
+      }
     } catch (e) {
       setError(readableError(e));
     } finally {
@@ -776,15 +800,6 @@ export function AdminFixturesPage() {
     setStatus(f?.status || "scheduled");
     setNotes(f?.notes || "");
     setShowFixtureModal(true);
-    setMessage("");
-  }
-
-  function openEnterResultModal(f: Fixture) {
-    setEditing(f);
-    setHomeScore(String(f.home_score ?? 0));
-    setAwayScore(String(f.away_score ?? 0));
-    setNotes(f.notes || "");
-    setShowResultModal(true);
     setMessage("");
   }
 
@@ -826,10 +841,7 @@ export function AdminFixturesPage() {
         notes,
       });
 
-      setMessage(
-        editing ? "Fixture details updated." : "Fixture created."
-      );
-
+      setMessage(editing ? "Fixture details updated successfully." : "Fixture created successfully.");
       setShowFixtureModal(false);
       await refresh();
     } catch (e) {
@@ -839,43 +851,43 @@ export function AdminFixturesPage() {
     }
   }
 
-  async function submitResultEntry(e: FormEvent) {
-    e.preventDefault();
+  async function saveInlineResult(f: Fixture) {
+    const scores = inlineScores[f.id];
+    if (!scores) return;
+
+    const hs = Number(scores.home);
+    const as = Number(scores.away);
 
     if (
-      homeScore.trim() === "" ||
-      awayScore.trim() === "" ||
-      !Number.isInteger(Number(homeScore)) ||
-      !Number.isInteger(Number(awayScore)) ||
-      Number(homeScore) < 0 ||
-      Number(awayScore) < 0
+      scores.home.trim() === "" ||
+      scores.away.trim() === "" ||
+      !Number.isInteger(hs) ||
+      !Number.isInteger(as) ||
+      hs < 0 ||
+      as < 0
     ) {
-      setError("Scores must be non-negative whole numbers.");
+      setError(`Scores for matchday ${f.matchday} must be non-negative whole numbers.`);
       return;
     }
 
-    if (!editing) return;
-
-    setBusy(true);
+    setSavingFixtureId(f.id);
     setError("");
     setMessage("");
 
     try {
       await saveFixture({
-        ...editing,
+        ...f,
         status: "completed",
-        home_score: Number(homeScore),
-        away_score: Number(awayScore),
-        notes,
+        home_score: hs,
+        away_score: as,
       });
 
-      setMessage("Match result saved successfully.");
-      setShowResultModal(false);
+      setMessage(`Match result saved for Matchday ${f.matchday}.`);
       await refresh();
     } catch (e) {
       setError(readableError(e));
     } finally {
-      setBusy(false);
+      setSavingFixtureId(null);
     }
   }
 
@@ -908,6 +920,7 @@ export function AdminFixturesPage() {
     }
 
     setPreview(proposed);
+    setShowGeneratorPreview(true);
   }
 
   async function saveGenerated() {
@@ -929,6 +942,7 @@ export function AdminFixturesPage() {
 
       setMessage(`${preview.length} fixtures generated and saved in bulk.`);
       setPreview(null);
+      setShowGeneratorPreview(false);
 
       await refresh();
     } catch (e) {
@@ -941,8 +955,7 @@ export function AdminFixturesPage() {
   async function handleClearAllFixtures() {
     if (!season || fixtures.length === 0 || busy) return;
 
-    const seasonName =
-      seasons.find((s) => s.id === season)?.name || "this season";
+    const seasonName = seasons.find((s) => s.id === season)?.name || "this season";
 
     if (
       !confirm(
@@ -959,11 +972,10 @@ export function AdminFixturesPage() {
     try {
       const deletedCount = await deleteAllFixtures(season);
 
-      setMessage(
-        `Successfully deleted ${deletedCount} fixtures for ${seasonName}.`
-      );
+      setMessage(`Successfully deleted ${deletedCount} fixtures for ${seasonName}.`);
 
       setPreview(null);
+      setSelectedMatchday("all");
       await refresh();
     } catch (e) {
       setError(readableError(e));
@@ -972,59 +984,54 @@ export function AdminFixturesPage() {
     }
   }
 
+  // Filter and matchday computations
+  const availableMatchdays = Array.from(new Set(fixtures.map((f) => f.matchday))).sort(
+    (a, b) => a - b
+  );
+
+  const filteredFixtures = fixtures.filter((f) => {
+    // Matchday filter
+    if (selectedMatchday !== "all" && f.matchday !== selectedMatchday) {
+      return false;
+    }
+    // Status filter
+    if (statusFilter !== "all" && f.status !== statusFilter) {
+      return false;
+    }
+    // Search query (home or away team name)
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const homeName = f.home_team?.name?.toLowerCase() || "";
+      const awayName = f.away_team?.name?.toLowerCase() || "";
+      if (!homeName.includes(q) && !awayName.includes(q)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  const completedCount = fixtures.filter((f) => f.status === "completed").length;
+  const scheduledCount = fixtures.filter((f) => f.status === "scheduled").length;
+  const remainingCount = fixtures.length - completedCount;
+
   return (
-    <>
-      <AdminHeading
-        eyebrow="MATCH CENTRE"
-        title="Fixtures & results"
-        description="Create the schedule, update match status and publish accurate scores."
-      />
+    <div className="match-centre">
+      {/* Header */}
+      <div className="match-centre-header">
+        <div>
+          <span className="eyebrow">MATCH CENTRE</span>
+          <h1>Fixtures & Results</h1>
+          <p>Manage match schedules, publish scores, and oversee matchdays.</p>
+        </div>
 
-      <div className="admin-toolbar">
-        <label className="compact-label">
-          Season
-          <select
-            value={season}
-            onChange={async (e) => {
-              const id = e.target.value;
-
-              setSeason(id);
-              setPreview(null);
-              setError("");
-              setMessage("");
-              setLoading(true);
-
-              try {
-                const [tt, ff] = await Promise.all([
-                  getTeams(id),
-                  getFixtures(id),
-                ]);
-
-                setTeams(tt);
-                setFixtures(ff);
-              } catch (err) {
-                setError(readableError(err));
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            {seasons.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="toolbar-actions">
+        <div className="toolbar-actions-flex">
           <button
             type="button"
             className="button button-outline"
             onClick={generate}
             disabled={busy || loading}
           >
-            Generate schedule
+            <CalendarPlus size={16} /> Generate schedule
           </button>
 
           <button
@@ -1043,7 +1050,7 @@ export function AdminFixturesPage() {
               onClick={() => void handleClearAllFixtures()}
               disabled={busy || loading}
             >
-              <Trash2 size={16} /> Delete All Fixtures
+              <Trash2 size={16} /> Delete all fixtures
             </button>
           )}
         </div>
@@ -1052,295 +1059,435 @@ export function AdminFixturesPage() {
       {error && <Notice kind="error">{error}</Notice>}
       {message && <Notice kind="success">{message}</Notice>}
 
-      {preview && (
-        <div className="panel preview-panel">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">SCHEDULE PREVIEW</span>
-              <h2>{preview.length} fixtures proposed</h2>
-            </div>
+      {/* Season Selector Toolbar */}
+      <div className="match-centre-toolbar">
+        <div className="toolbar-group">
+          <label className="compact-label" style={{ marginBottom: 0 }}>
+            Active season:
+            <select
+              value={season}
+              onChange={async (e) => {
+                const id = e.target.value;
+                setSeason(id);
+                setPreview(null);
+                setSelectedMatchday("all");
+                setError("");
+                setMessage("");
+                setLoading(true);
 
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => setPreview(null)}
-              disabled={busy}
-            >
-              Discard
-            </button>
-          </div>
+                try {
+                  const [tt, ff] = await Promise.all([
+                    getTeams(id),
+                    getFixtures(id),
+                  ]);
 
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={double}
-              disabled={busy}
-              onChange={(e) => {
-                const checked = e.target.checked;
+                  setTeams(tt);
+                  setFixtures(ff);
 
-                setDouble(checked);
-                setPreview(generateRoundRobin(teams, checked));
+                  const initialScores: Record<string, { home: string; away: string }> = {};
+                  ff.forEach((f) => {
+                    initialScores[f.id] = {
+                      home: f.home_score !== null && f.home_score !== undefined ? String(f.home_score) : "",
+                      away: f.away_score !== null && f.away_score !== undefined ? String(f.away_score) : "",
+                    };
+                  });
+                  setInlineScores(initialScores);
+                } catch (err) {
+                  setError(readableError(err));
+                } finally {
+                  setLoading(false);
+                }
               }}
-            />{" "}
-            Double round-robin (home and away)
+            >
+              {seasons.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           </label>
+        </div>
 
-          <div className="preview-list">
-            {preview.slice(0, 8).map((f) => (
-              <div
-                key={`${f.matchday}-${f.home_team_id}-${f.away_team_id}`}
-              >
-                <span>MD {f.matchday}</span>
-                <strong>
-                  {teams.find((t) => t.id === f.home_team_id)?.name} vs{" "}
-                  {teams.find((t) => t.id === f.away_team_id)?.name}
-                </strong>
-              </div>
-            ))}
-          </div>
+        <div className="muted" style={{ fontSize: "0.875rem" }}>
+          Total Teams: <strong>{teams.length}</strong>
+        </div>
+      </div>
 
-          {preview.length > 8 && (
-            <p className="muted">
-              And {preview.length - 8} more fixtures…
-            </p>
-          )}
+      {/* Summary Cards */}
+      <div className="match-centre-stats">
+        <div className="match-stat-card">
+          <span>Total fixtures</span>
+          <strong>{fixtures.length}</strong>
+        </div>
+        <div className="match-stat-card">
+          <span>Completed matches</span>
+          <strong>{completedCount}</strong>
+        </div>
+        <div className="match-stat-card">
+          <span>Scheduled matches</span>
+          <strong>{scheduledCount}</strong>
+        </div>
+        <div className="match-stat-card">
+          <span>Remaining matches</span>
+          <strong>{remainingCount}</strong>
+        </div>
+      </div>
 
+      {/* Matchday Navigation Bar */}
+      {availableMatchdays.length > 0 && (
+        <div className="matchday-nav-bar">
           <button
             type="button"
-            className="button button-dark"
-            disabled={busy || loading}
-            onClick={() => void saveGenerated()}
+            className={`matchday-pill ${selectedMatchday === "all" ? "active" : ""}`}
+            onClick={() => setSelectedMatchday("all")}
           >
-            {busy ? "Saving schedule…" : "Confirm and save schedule"}
+            All Matchdays
+            <span className="count-badge">{fixtures.length}</span>
           </button>
+
+          {availableMatchdays.map((md) => {
+            const count = fixtures.filter((f) => f.matchday === md).length;
+            return (
+              <button
+                key={md}
+                type="button"
+                className={`matchday-pill ${selectedMatchday === md ? "active" : ""}`}
+                onClick={() => setSelectedMatchday(md)}
+              >
+                Matchday {md}
+                <span className="count-badge">{count}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Modal: Edit fixture details */}
+      {/* Search and Status Filter */}
+      <div className="fixtures-filter-bar">
+        <div className="fixtures-search-input">
+          <Search size={16} />
+          <input
+            type="text"
+            placeholder="Search team name..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <label className="compact-label" style={{ marginBottom: 0, display: "flex", alignItems: "center", gap: 8 }}>
+          Status:
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+          >
+            <option value="all">All Statuses</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="completed">Completed</option>
+            <option value="postponed">Postponed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </label>
+      </div>
+
+      {/* Generator Preview Modal / Panel */}
+      {showGeneratorPreview && preview && (
+        <div className="admin-modal-overlay">
+          <div className="admin-modal-dialog" style={{ maxWidth: 700 }}>
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">SCHEDULE PREVIEW</span>
+                <h2>{preview.length} fixtures proposed</h2>
+              </div>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setPreview(null);
+                  setShowGeneratorPreview(false);
+                }}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+            </div>
+
+            <label className="check-label" style={{ margin: "16px 0", display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={double}
+                disabled={busy}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setDouble(checked);
+                  setPreview(generateRoundRobin(teams, checked));
+                }}
+              />
+              Double round-robin (home and away)
+            </label>
+
+            <div className="preview-list" style={{ maxHeight: 260, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", marginBottom: "16px", background: "#f8fafc" }}>
+              {preview.map((f, idx) => (
+                <div key={idx} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #e2e8f0", fontSize: "0.875rem" }}>
+                  <span className="muted">MD {f.matchday}</span>
+                  <strong>
+                    {teams.find((t) => t.id === f.home_team_id)?.name} vs{" "}
+                    {teams.find((t) => t.id === f.away_team_id)?.name}
+                  </strong>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={() => {
+                  setPreview(null);
+                  setShowGeneratorPreview(false);
+                }}
+                disabled={busy}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                className="button button-dark"
+                disabled={busy || loading}
+                onClick={() => void saveGenerated()}
+              >
+                {busy ? "Saving schedule…" : "Confirm and save schedule"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Add or Edit Fixture Details */}
       {showFixtureModal && (
-        <form className="panel admin-form" onSubmit={submitFixtureEdit}>
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">
-                {editing ? "EDIT DETAILS" : "NEW FIXTURE"}
-              </span>
-              <h2>{editing ? "Edit fixture details" : "Create fixture"}</h2>
-            </div>
+        <div className="admin-modal-overlay">
+          <div className="admin-modal-dialog">
+            <form onSubmit={submitFixtureEdit}>
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">
+                    {editing ? "EDIT DETAILS" : "NEW FIXTURE"}
+                  </span>
+                  <h2>{editing ? "Edit fixture details" : "Create fixture"}</h2>
+                </div>
 
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => setShowFixtureModal(false)}
-              disabled={busy}
-            >
-              Cancel
-            </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => setShowFixtureModal(false)}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+              </div>
+
+              <div className="form-grid" style={{ marginTop: 16 }}>
+                <label>
+                  Home team
+                  <select
+                    required
+                    value={home}
+                    onChange={(e) => setHome(e.target.value)}
+                  >
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Away team
+                  <select
+                    required
+                    value={away}
+                    onChange={(e) => setAway(e.target.value)}
+                  >
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Matchday
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    required
+                    value={matchday}
+                    onChange={(e) => setMatchday(e.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Date and time
+                  <input
+                    type="datetime-local"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                  />
+                </label>
+
+                <label className="span-two">
+                  Match status
+                  <select
+                    value={status}
+                    onChange={(e) =>
+                      setStatus(e.target.value as Fixture["status"])
+                    }
+                  >
+                    <option value="scheduled">Scheduled</option>
+                    <option value="completed">Completed</option>
+                    <option value="postponed">Postponed</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </label>
+
+                <label className="span-two">
+                  Match notes
+                  <textarea
+                    rows={2}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+                <button
+                  type="button"
+                  className="button button-outline"
+                  onClick={() => setShowFixtureModal(false)}
+                >
+                  Cancel
+                </button>
+                <button className="button button-dark" disabled={busy}>
+                  {busy ? "Saving…" : "Save fixture"}
+                </button>
+              </div>
+            </form>
           </div>
-
-          <div className="form-grid">
-            <label>
-              Home team
-              <select
-                required
-                value={home}
-                onChange={(e) => setHome(e.target.value)}
-              >
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Away team
-              <select
-                required
-                value={away}
-                onChange={(e) => setAway(e.target.value)}
-              >
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Matchday
-              <input
-                type="number"
-                min="1"
-                step="1"
-                required
-                value={matchday}
-                onChange={(e) => setMatchday(e.target.value)}
-              />
-            </label>
-
-            <label>
-              Date and time
-              <input
-                type="datetime-local"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-              />
-            </label>
-
-            <label>
-              Match status
-              <select
-                value={status}
-                onChange={(e) =>
-                  setStatus(e.target.value as Fixture["status"])
-                }
-              >
-                <option value="scheduled">Scheduled</option>
-                <option value="completed">Completed</option>
-                <option value="postponed">Postponed</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-            </label>
-
-            <label className="span-two">
-              Match notes
-              <textarea
-                rows={2}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-            </label>
-          </div>
-
-          <button className="button button-dark" disabled={busy}>
-            {busy ? "Saving…" : "Save fixture"}
-          </button>
-        </form>
+        </div>
       )}
 
-      {/* Modal: Enter or edit result */}
-      {showResultModal && editing && (
-        <form className="panel admin-form" onSubmit={submitResultEntry}>
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">MATCH RESULT</span>
-              <h2>Record score for Matchday {editing.matchday}</h2>
-              <p>
-                {teams.find((t) => t.id === editing.home_team_id)?.name} vs{" "}
-                {teams.find((t) => t.id === editing.away_team_id)?.name}
-              </p>
-            </div>
-
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => setShowResultModal(false)}
-              disabled={busy}
-            >
-              Cancel
-            </button>
-          </div>
-
-          <div className="form-grid">
-            <label>
-              {teams.find((t) => t.id === editing.home_team_id)?.name} Score
-              <input
-                type="number"
-                min="0"
-                step="1"
-                required
-                value={homeScore}
-                onChange={(e) => setHomeScore(e.target.value)}
-              />
-            </label>
-
-            <label>
-              {teams.find((t) => t.id === editing.away_team_id)?.name} Score
-              <input
-                type="number"
-                min="0"
-                step="1"
-                required
-                value={awayScore}
-                onChange={(e) => setAwayScore(e.target.value)}
-              />
-            </label>
-
-            <label className="span-two">
-              Match notes
-              <textarea
-                rows={2}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-            </label>
-          </div>
-
-          <button className="button button-dark" disabled={busy}>
-            {busy ? "Saving result…" : "Save Match Result"}
-          </button>
-        </form>
-      )}
-
+      {/* Main Fixtures List with Inline Score Entry */}
       {loading ? (
         <Loading />
-      ) : (
-        <div className="panel admin-list">
-          {fixtures.length ? (
-            fixtures.map((f) => (
-              <div className="fixture-admin-row" key={f.id}>
-                <div className="fixture-admin-meta">
-                  <span>MD {f.matchday}</span>
+      ) : filteredFixtures.length > 0 ? (
+        <div className="fixtures-grid">
+          {filteredFixtures.map((f) => {
+            const currentScores = inlineScores[f.id] || { home: "", away: "" };
+            const isSaving = savingFixtureId === f.id;
+
+            return (
+              <div className="fixture-match-card" key={f.id}>
+                {/* Meta / Matchday & Status */}
+                <div className="fixture-card-meta">
+                  <span className="md-tag">MD {f.matchday}</span>
                   <StatusPill status={f.status} />
+                  {f.scheduled_at && (
+                    <span className="muted" style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: 4 }}>
+                      <Clock size={12} /> {new Date(f.scheduled_at).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  )}
                 </div>
 
-                <div className="fixture-admin-teams">
-                  <span>{f.home_team?.name || "Unknown"}</span>
-                  <strong>
-                    {f.status === "completed"
-                      ? `${f.home_score} – ${f.away_score}`
-                      : "vs"}
-                  </strong>
-                  <span>{f.away_team?.name || "Unknown"}</span>
+                {/* Teams & Inline Score Inputs */}
+                <div className="fixture-card-teams">
+                  <div className="team-side home">
+                    <span>{f.home_team?.name || "Unknown Team"}</span>
+                    <TeamMark team={f.home_team} />
+                  </div>
+
+                  {/* Inline Score Entry Box */}
+                  <div className="inline-score-form">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className="inline-score-input"
+                      value={currentScores.home}
+                      onChange={(e) =>
+                        setInlineScores((prev) => ({
+                          ...prev,
+                          [f.id]: { ...currentScores, home: e.target.value },
+                        }))
+                      }
+                      placeholder="–"
+                    />
+                    <span className="score-divider">:</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className="inline-score-input"
+                      value={currentScores.away}
+                      onChange={(e) =>
+                        setInlineScores((prev) => ({
+                          ...prev,
+                          [f.id]: { ...currentScores, away: e.target.value },
+                        }))
+                      }
+                      placeholder="–"
+                    />
+
+                    <button
+                      type="button"
+                      className="button button-dark button-small"
+                      disabled={isSaving}
+                      onClick={() => void saveInlineResult(f)}
+                      title="Save Result"
+                      style={{ marginLeft: 6, padding: "6px 12px" }}
+                    >
+                      {isSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+
+                  <div className="team-side away">
+                    <TeamMark team={f.away_team} />
+                    <span>{f.away_team?.name || "Unknown Team"}</span>
+                  </div>
                 </div>
 
-                <div className="fixture-actions">
-                  <button
-                    type="button"
-                    className="button button-small button-outline"
-                    onClick={() => openEnterResultModal(f)}
-                    disabled={busy}
-                  >
-                    <FileCheck2 size={15} />{" "}
-                    {f.status === "completed" ? "Edit Result" : "Enter Result"}
-                  </button>
-
+                {/* Actions */}
+                <div className="fixture-card-actions">
                   <button
                     type="button"
                     className="icon-button"
                     aria-label={`Edit fixture details for matchday ${f.matchday}`}
                     onClick={() => openEditFixtureModal(f)}
                     disabled={busy}
+                    title="Edit fixture details & notes"
                   >
                     <Pencil size={17} />
                   </button>
                 </div>
               </div>
-            ))
-          ) : (
-            <div className="empty-state">
-              <CalendarDays />
-              <strong>No fixtures yet</strong>
-              <p>
-                Create one manually or generate a round-robin schedule.
-              </p>
-            </div>
-          )}
+            );
+          })}
+        </div>
+      ) : (
+        <div className="panel empty-state">
+          <CalendarDays size={32} />
+          <strong>No fixtures found</strong>
+          <p>
+            {fixtures.length === 0
+              ? "Create fixtures manually or generate a round-robin schedule to get started."
+              : "No fixtures match your current search or status filter."}
+          </p>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
