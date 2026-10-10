@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowRight, CalendarDays, ChevronRight, CircleDot, Trophy, Users, Award, Search, Crown, Sparkles, ShieldCheck, Flame, ShieldAlert } from "lucide-react";
+import { ArrowRight, CalendarDays, ChevronRight, CircleDot, Trophy, Users, Search, Crown, Sparkles, Flame, ShieldCheck } from "lucide-react";
 import type { Fixture, Season, Standing, Team } from "../types";
 import { getActiveSeason, getFixtures, getStandings, getTeams, getSeasons } from "../services/data";
 import { isSupabaseConfigured } from "../lib/supabase";
@@ -203,7 +203,6 @@ export function OverviewPage() {
 
   const isSeasonFinished = data.fixtures.length > 0 && data.fixtures.every(f => f.status === "completed");
 
-  // Compute Golden Boot & Best Defense stats from teams and completed fixtures
   const statsMap: Record<string, { team: Team; goalsFor: number; goalsAgainst: number }> = {};
   data.teams.forEach(t => {
     statsMap[t.id] = { team: t, goalsFor: 0, goalsAgainst: 0 };
@@ -316,7 +315,6 @@ export function OverviewPage() {
             <StandingsTable standings={data.standings} fixtures={data.fixtures} compact/>
           </section>
 
-          {/* Golden Boot & Best Defense Section */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <section className="panel" style={{ padding: 20 }}>
               <div className="section-head" style={{ marginBottom: 12 }}>

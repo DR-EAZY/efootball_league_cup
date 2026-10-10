@@ -11,8 +11,6 @@ import {
   CheckCircle2,
   Search,
   Clock,
-  AlertCircle,
-  FileText,
 } from "lucide-react";
 import type { Fixture, Season, Team } from "../types";
 import {
